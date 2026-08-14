@@ -1,0 +1,34 @@
+# ---- 运行时数据与凭据（绝对不要提交）----
+.env
+config.json
+config.json.broken-*
+web_auth.json
+data/*
+!data/README.md
+outlookemail-data/
+logs/
+*.log
+
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / 前端 ----
+front/node_modules/
+front/dist/
+npm-debug.log*
+yarn-error.log*
+.vite/
+
+# ---- 编辑器与系统 ----
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.bak
