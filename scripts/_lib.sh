@@ -216,11 +216,26 @@ ensure_config() {
     || die "配置准备失败: ${target}"
 }
 
+frontend_sources_changed() {
+  # git pull 会把改动文件的 mtime 刷新成检出时间，只看 dist 是否存在会一直跑旧包。
+  local dist="$1"
+  local newer
+  newer=$(find "$ROOT_DIR/front" \
+    -path "$ROOT_DIR/front/node_modules" -prune -o \
+    -path "$ROOT_DIR/front/dist" -prune -o \
+    -type f -newer "$dist" -print 2>/dev/null | head -n 1)
+  [[ -n "$newer" ]]
+}
+
 ensure_frontend() {
   local dist="$ROOT_DIR/front/dist/index.html"
   if (( ! REBUILD_WEB )) && [[ -f "$dist" ]]; then
-    ok "前端产物已存在"
-    return 0
+    if frontend_sources_changed "$dist"; then
+      warn "前端源码比产物新，重新构建（跳过可加 --skip-install）"
+    else
+      ok "前端产物已存在"
+      return 0
+    fi
   fi
   if ! has npm; then
     warn "未找到 npm，跳过前端构建；未构建时访问 / 会返回 503（API 仍可用）"
@@ -339,7 +354,11 @@ run_check() {
   fi
 
   if [[ -f "$ROOT_DIR/front/dist/index.html" ]]; then
-    ok "前端产物已构建"
+    if frontend_sources_changed "$ROOT_DIR/front/dist/index.html"; then
+      warn "前端产物比源码旧（启动时会自动重新构建）"
+    else
+      ok "前端产物已构建"
+    fi
   elif has npm; then
     warn "前端未构建（启动时执行 npm run build）"
   else

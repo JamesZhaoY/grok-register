@@ -17,6 +17,17 @@ export function LoginPage({ setupRequired, onLoggedIn }: { setupRequired: boolea
     try {
       if (setupRequired) await api.setup(username, password, confirmPassword);
       else await api.login(username, password);
+      // 会话 Cookie 可能被浏览器直接丢弃（典型情况：纯 HTTP 页面收到带 Secure 标记的 Cookie）。
+      // 先确认一次再进控制台，否则用户只会看到刚登录就被 401 弹回来，看不到原因。
+      const me = await api.authMe().catch(() => null);
+      if (me && !me.authenticated) {
+        setError(
+          "账号已就绪，但浏览器没有保存会话 Cookie，无法进入控制台。" +
+            "请改用 http://127.0.0.1:8787 访问，或用 HTTPS 部署；" +
+            "也可以设置 GROK_WEB_COOKIE_SECURE=0 后重启服务。"
+        );
+        return;
+      }
       onLoggedIn();
     } catch (err: any) {
       setError(err.message || "登录失败");

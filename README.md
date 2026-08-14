@@ -34,7 +34,8 @@ powershell -ExecutionPolicy Bypass -File scripts\start-windows.ps1 -Open
 也可以直接双击 `scripts\start-windows.bat`。
 
 脚本按顺序自动准备 `.venv` → Python 依赖 → Camoufox 浏览器引擎 → `config.json` → 前端产物，然后拉起控制台。
-**首次运行需要下载几百 MB 的浏览器引擎，慢是正常的**，之后再启动只要几秒。`Ctrl+C` 停止服务。
+**首次运行需要下载几百 MB 的浏览器引擎，慢是正常的**，之后再启动只要几秒。`git pull` 之后如果前端源码比
+`front/dist` 新，脚本会自动重新构建，不用手动加 `--rebuild-web`。`Ctrl+C` 停止服务。
 
 不确定环境是否齐全，可以先体检（只检查，不启动服务）：
 
@@ -266,17 +267,22 @@ docker compose run --rm grok-register python /app/docker/camoufox_smoke.py
 前端没编译。装好 Node.js 22+ 后执行 `scripts/start-macos.sh --rebuild-web`，
 或手动 `cd front && npm install && npm run build`。API（含 `/api/docs`）在未构建时仍可用。
 
-### 登录之后立刻被弹回登录页
+### 创建管理员后立刻 401，被弹回登录页
 
-会话 Cookie 默认带 `Secure` 标记，浏览器在纯 HTTP 页面下会直接丢弃它（尤其是用局域网 IP 访问时）。
-本机运行改成：
+会话 Cookie 没被浏览器保存。`GROK_WEB_COOKIE_SECURE` 默认是 `auto`：只有请求本身是 HTTPS
+（含反代转发的 `X-Forwarded-Proto: https`）才给 Cookie 加 `Secure` 标记，纯 HTTP 访问不加，
+所以用局域网 IP 打开也能正常登录。**如果你的版本较旧，先 `git pull` 更新**，旧版默认恒开 `Secure`，
+浏览器在纯 HTTP 页面下会直接丢弃 Cookie。
+
+想手动固定这个行为：
 
 ```bash
-GROK_WEB_COOKIE_SECURE=0 scripts/start-macos.sh --host 0.0.0.0
+GROK_WEB_COOKIE_SECURE=0 scripts/start-macos.sh --host 0.0.0.0   # 恒关，纯 HTTP 部署
+GROK_WEB_COOKIE_SECURE=1 scripts/start-macos.sh                  # 恒开，仅 HTTPS 部署
 ```
 
-Docker 的 `.env` 默认已是 `GROK_WEB_COOKIE_SECURE=0`；反过来，用 HTTPS 域名部署时要设成 `1`，
-然后 `docker compose up -d --force-recreate`。
+Docker 改 `.env` 里的同名变量，再 `docker compose up -d --force-recreate`。
+另外浏览器若开了「阻止所有 Cookie」，任何设置都救不回来，需要给该站点放行。
 
 ### 忘记管理员密码
 

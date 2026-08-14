@@ -41,7 +41,7 @@ Run the server (defaults come from `GROK_WEB_HOST` / `GROK_WEB_PORT`; uvicorn fa
 cd front && npm run dev                                           # Vite dev server, proxies /api -> 127.0.0.1:8787
 ```
 
-Tests are plain `unittest` (no pytest, no conftest); 109 tests across 20 modules in `backend/tests/`:
+Tests are plain `unittest` (no pytest, no conftest); 114 tests across 20 modules in `backend/tests/`:
 
 ```bash
 .venv/bin/python -m unittest discover -s backend/tests -v         # full suite
@@ -50,11 +50,11 @@ Tests are plain `unittest` (no pytest, no conftest); 109 tests across 20 modules
 ```
 
 `python -m unittest test_signup_flow` (bare module name) fails with `ModuleNotFoundError`; always use the
-`backend.tests.*` dotted path. Four of the 109 do not pass on macOS and that is expected, not a
+`backend.tests.*` dotted path. Four of the 114 do not pass on macOS and that is expected, not a
 regression: three path-equality assertions in `test_auth_artifact_loading.py` and
 `test_failure_screenshots.py` break because `Path.resolve()` rewrites `/var/folders/...` to
 `/private/var/folders/...`, and `test_browser_lifecycle.CamoufoxProcessMatchTests` errors because
-`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "105 ok + those 4".
+`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "110 ok + those 4".
 
 The runtime Python is whatever the launcher's `PYTHON_CANDIDATES` finds first, which on a fresh box can be
 3.14 — so the source must stay **PEP 765 clean**: no `break` / `continue` / `return` that exits a `finally`
@@ -85,6 +85,9 @@ not an array) and optional `EXTRA_USAGE`, then call `grok_main "$@"`. It must st
 macOS's system bash: no `mapfile`, no `declare -A`, use `${ARR[@]+"${ARR[@]}"}` for possibly-empty arrays,
 and never write `test && cmd` as a bare statement (it exits the script under `set -e`). `--xvfb` is
 Linux-only and re-execs the script under `xvfb-run`, guarded by `GROK_XVFB_WRAPPED`.
+`ensure_frontend()` rebuilds when `front/dist/index.html` is missing **or** older than any file under
+`front/` outside `node_modules`/`dist` (`frontend_sources_changed()`, mirrored as `Test-FrontendStale` in
+the PowerShell launcher) — existence alone would keep serving a stale bundle after every `git pull`.
 
 `scripts/seed_config.py` is the single config-preparation implementation, shared by `docker/entrypoint.sh`
 and all three launchers: create from template, additively merge template-only keys without overwriting user
@@ -236,8 +239,15 @@ silently drop it.
 
 Environment overrides worth knowing: `GROK_FORCE_HEADED=1` beats `browser_headless` in config (the Docker
 image sets it and runs headed Camoufox under Xvfb), `GROK_DOCKER_PROXY_HOST` rewrites loopback proxy hosts
-via `integrations/proxy.resolve_proxy_url`, `GROK_WEB_COOKIE_SECURE` toggles the session-cookie Secure flag
-behind a reverse proxy.
+via `integrations/proxy.resolve_proxy_url`, `GROK_WEB_COOKIE_SECURE` forces the session-cookie `Secure`
+flag on (`1/true/yes/on`) or off (`0/false/no/off`) — anything else, including unset, means **auto**:
+`_session_cookie_secure()` sets it only when the request is HTTPS, reading `X-Forwarded-Proto` first (its
+leading entry) and falling back to `request.url.scheme`. Auto is the required default; a hardcoded `Secure`
+makes the browser silently drop the session cookie on any plain-HTTP origin other than loopback, which
+surfaces as "created the admin, then the console 401s straight back to the login page". Both
+`/api/auth/setup` and `/api/auth/login` must issue the cookie through `_set_session_cookie()`, and
+`front/src/pages/Login.tsx` re-checks `/api/auth/me` after a successful login so a dropped cookie shows a
+real message instead of a silent bounce. `backend/tests/test_console_authentication.py` pins all of it.
 
 ## Data, persistence, safety guards
 

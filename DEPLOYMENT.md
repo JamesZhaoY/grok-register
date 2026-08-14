@@ -81,7 +81,7 @@ GROK_REGISTER_IMAGE=grok-register:local
 GROK_WEB_PORT=8787
 GROK_WEB_BIND=0.0.0.0
 GROK_SHM_SIZE=1gb
-GROK_WEB_COOKIE_SECURE=0
+GROK_WEB_COOKIE_SECURE=auto
 PUID=
 PGID=
 GROK_LOG_KEEP=20
@@ -93,6 +93,7 @@ GROK_STOP_GRACE=30s
 | 变量 | 说明 |
 | --- | --- |
 | `GROK_WEB_BIND` | 端口映射的宿主机监听地址。反向代理场景设 `127.0.0.1`，控制台就不会直接暴露到公网 |
+| `GROK_WEB_COOKIE_SECURE` | 会话 Cookie 的 `Secure` 标记。`auto`（默认）按请求协议判断，`1` 恒开，`0` 恒关。纯 HTTP 下恒开会让浏览器丢弃 Cookie，登录后立刻 401 |
 | `PUID` / `PGID` | 把容器内运行用户重映射到宿主 UID/GID（`id -u` / `id -g`），解决 bind mount 属主不一致。留空则沿用镜像内的 `app`（10001） |
 | `GROK_LOG_KEEP` | `logs/` 里保留的启动日志份数，`0` 表示不清理 |
 | `GROK_LOG_MAX_SIZE` / `GROK_LOG_MAX_FILE` | `docker logs` 的 json-file 轮转上限，避免日志占满磁盘 |
@@ -109,7 +110,8 @@ GROK_STOP_GRACE=30s
 | `GROK_CONFIG_TEMPLATE` | 首次生成配置的模板路径，默认 `/app/config.example.json` |
 | `GROK_RUN_USER` | 容器内运行用户，默认 `app` |
 
-公网 HTTPS 使用：
+公网 HTTPS 场景默认的 `auto` 已经够用：反代转发 `X-Forwarded-Proto: https` 时会自动加上 `Secure`。
+想强制固定（例如反代不转发协议头）再写死：
 
 ```dotenv
 GROK_WEB_COOKIE_SECURE=1
@@ -256,7 +258,8 @@ http://127.0.0.1:8787
 GROK_WEB_BIND=127.0.0.1
 ```
 
-HTTPS 部署时设置 `GROK_WEB_COOKIE_SECURE=1`。反向代理需转发 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto`。
+反向代理需转发 `Host`、`X-Forwarded-For` 和 `X-Forwarded-Proto`。转发了协议头，HTTPS 部署就会自动
+给会话 Cookie 加上 `Secure`（`GROK_WEB_COOKIE_SECURE` 默认 `auto`）；不转发时手动设成 `1`。
 
 ## 资源建议
 

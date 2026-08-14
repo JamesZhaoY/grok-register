@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,11 @@ DATA_DIR = DATA_ROOT
 STATIC_DIR = STATIC_ROOT
 WEB_SESSION_COOKIE = "grok_register_session"
 WEB_SESSION_TTL = 60 * 60 * 24 * 7
+# GROK_WEB_COOKIE_SECURE 的三种取值：真值恒开、假值恒关、其余（含未设置）按请求协议自动判断。
+# 默认必须是 auto：控制台常以纯 HTTP 暴露在局域网 IP 上，恒开 Secure 会让浏览器
+# 直接丢弃会话 Cookie，表现为“刚建好管理员就被 401 弹回登录页”。
+COOKIE_SECURE_TRUTHY = {"1", "true", "yes", "on"}
+COOKIE_SECURE_FALSY = {"0", "false", "no", "off"}
 WEB_AUTH_FILE = DATA_DIR / "web_auth.json"
 LEGACY_WEB_AUTH_FILE = APP_DIR / "web_auth.json"
 MAX_BATCH_ACCOUNT_IDS = 1000
@@ -235,6 +240,43 @@ def _valid_session(value: str) -> bool:
         return hmac.compare_digest(raw_username, username) and int(raw_expires) > int(time.time())
     except (ValueError, UnicodeError, base64.binascii.Error):
         return False
+
+
+def _request_is_https(request: Request | None) -> bool:
+    """判断请求实际走的是不是 HTTPS，兼容反向代理转发的 X-Forwarded-Proto。"""
+    if request is None:
+        return False
+    forwarded = str(request.headers.get("x-forwarded-proto") or "")
+    # 多级代理会拼成 "https, http"，第一段才是最外层客户端用的协议
+    first = forwarded.split(",")[0].strip().lower()
+    if first:
+        return first == "https"
+    return str(request.url.scheme or "").strip().lower() == "https"
+
+
+def _session_cookie_secure(request: Request | None) -> bool:
+    raw = str(os.environ.get("GROK_WEB_COOKIE_SECURE", "")).strip().lower()
+    if raw in COOKIE_SECURE_TRUTHY:
+        return True
+    if raw in COOKIE_SECURE_FALSY:
+        return False
+    return _request_is_https(request)
+
+
+def _set_session_cookie(
+    response: Response, request: Request | None, username: str, secret: str
+) -> None:
+    expires_at = int(time.time()) + WEB_SESSION_TTL
+    response.set_cookie(
+        WEB_SESSION_COOKIE,
+        _sign_session(username, expires_at, secret),
+        max_age=WEB_SESSION_TTL,
+        expires=WEB_SESSION_TTL,
+        httponly=True,
+        secure=_session_cookie_secure(request),
+        samesite="lax",
+        path="/",
+    )
 
 
 def _auth_required_path(path: str) -> bool:
@@ -642,7 +684,7 @@ def create_app() -> FastAPI:
         }
 
     @app.post("/api/auth/setup")
-    def api_auth_setup(body: LoginBody) -> JSONResponse:
+    def api_auth_setup(body: LoginBody, request: Request) -> JSONResponse:
         if _auth_record() is not None:
             raise HTTPException(status_code=409, detail="管理员账号已创建")
         username = str(body.username or "").strip()
@@ -662,22 +704,11 @@ def create_app() -> FastAPI:
         response = JSONResponse(
             {"ok": True, "enabled": True, "authenticated": True, "username": username}
         )
-        expires_at = int(time.time()) + WEB_SESSION_TTL
-        response.set_cookie(
-            WEB_SESSION_COOKIE,
-            _sign_session(username, expires_at, record["session_secret"]),
-            max_age=WEB_SESSION_TTL,
-            expires=WEB_SESSION_TTL,
-            httponly=True,
-            secure=str(os.environ.get("GROK_WEB_COOKIE_SECURE", "1")).strip().lower()
-            not in {"0", "false", "no", "off"},
-            samesite="lax",
-            path="/",
-        )
+        _set_session_cookie(response, request, username, record["session_secret"])
         return response
 
     @app.post("/api/auth/login")
-    def api_auth_login(body: LoginBody) -> JSONResponse:
+    def api_auth_login(body: LoginBody, request: Request) -> JSONResponse:
         record = _auth_record()
         if record is None:
             raise HTTPException(status_code=409, detail="请先创建管理员账号")
@@ -693,21 +724,10 @@ def create_app() -> FastAPI:
         )
         if not (hmac.compare_digest(supplied_user, username) and valid_password):
             raise HTTPException(status_code=401, detail="账号或密码错误")
-        expires_at = int(time.time()) + WEB_SESSION_TTL
         response = JSONResponse(
             {"ok": True, "enabled": True, "authenticated": True, "username": username}
         )
-        response.set_cookie(
-            WEB_SESSION_COOKIE,
-            _sign_session(username, expires_at, record["session_secret"]),
-            max_age=WEB_SESSION_TTL,
-            expires=WEB_SESSION_TTL,
-            httponly=True,
-            secure=str(os.environ.get("GROK_WEB_COOKIE_SECURE", "1")).strip().lower()
-            not in {"0", "false", "no", "off"},
-            samesite="lax",
-            path="/",
-        )
+        _set_session_cookie(response, request, username, record["session_secret"])
         return response
 
     @app.post("/api/auth/logout")

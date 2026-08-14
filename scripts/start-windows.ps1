@@ -258,11 +258,37 @@ function Initialize-Config {
     }
 }
 
+function Test-FrontendStale {
+    # git pull 会把改动文件的 mtime 刷新成检出时间，只看 dist 是否存在会一直跑旧包。
+    param([string]$Dist)
+    if (-not (Test-Path -LiteralPath $Dist)) { return $true }
+    $frontDir = Join-Path $RootDir 'front'
+    $builtAt = (Get-Item -LiteralPath $Dist).LastWriteTimeUtc
+    # 不进 node_modules / dist：前者动辄几万个文件，全量枚举会明显拖慢启动
+    $newer = Get-ChildItem -LiteralPath $frontDir -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'node_modules' -and $_.Name -ne 'dist' } |
+        ForEach-Object {
+            if ($_.PSIsContainer) {
+                Get-ChildItem -LiteralPath $_.FullName -Recurse -File -Force -ErrorAction SilentlyContinue
+            } else {
+                $_
+            }
+        } |
+        Where-Object { $_.LastWriteTimeUtc -gt $builtAt } |
+        Select-Object -First 1
+    return [bool]$newer
+}
+
 function Build-Frontend {
     $dist = Join-Path $RootDir 'front\dist\index.html'
     if ((-not $RebuildWeb) -and (Test-Path -LiteralPath $dist)) {
-        Write-Ok '前端产物已存在'
-        return
+        if (Test-FrontendStale -Dist $dist) {
+            Write-Warn '前端源码比产物新，重新构建（跳过可加 -SkipInstall）'
+        }
+        else {
+            Write-Ok '前端产物已存在'
+            return
+        }
     }
     if (-not (Test-Command 'npm')) {
         Write-Warn '未找到 npm，跳过前端构建；未构建时访问 / 会返回 503（API 仍可用）'
@@ -387,7 +413,11 @@ function Invoke-Check {
     else { Write-Warn "缺少配置文件（启动时按 config.example.json 生成）: $cfg" }
 
     if (Test-Path -LiteralPath (Join-Path $RootDir 'front\dist\index.html')) {
-        Write-Ok '前端产物已构建'
+        if (Test-FrontendStale -Dist (Join-Path $RootDir 'front\dist\index.html')) {
+            Write-Warn '前端产物比源码旧（启动时会自动重新构建）'
+        } else {
+            Write-Ok '前端产物已构建'
+        }
     } elseif (Test-Command 'npm') {
         Write-Warn '前端未构建（启动时执行 npm run build）'
     } else {

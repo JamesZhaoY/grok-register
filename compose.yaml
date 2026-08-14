@@ -12,7 +12,7 @@ services:
       - "${GROK_WEB_BIND:-0.0.0.0}:${GROK_WEB_PORT:-8787}:8787"
     environment:
       TZ: ${TZ:-UTC}
-      GROK_WEB_COOKIE_SECURE: ${GROK_WEB_COOKIE_SECURE:-0}
+      GROK_WEB_COOKIE_SECURE: ${GROK_WEB_COOKIE_SECURE:-auto}
       GROK_FORCE_HEADED: "1"
       GROK_CONFIG_FILE: /app/data/config.json
       GROK_DOCKER_PROXY_HOST: host.docker.internal
