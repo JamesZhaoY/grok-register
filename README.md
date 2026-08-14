@@ -1,8 +1,120 @@
 # Grok Register
 
-基于 FastAPI、React 和 Camoufox 的 Web 注册管理工具。支持注册任务、账号管理，以及 CPA / Grok2API 授权文件生成。
+基于 FastAPI、React 和 Camoufox 的 xAI / Grok 账号注册管理工具。Web 控制台驱动 Camoufox 浏览器走完
+`accounts.x.ai` 注册流程，从临时邮箱取验证码，再把拿到的 `sso` 换成 CPA / Grok2API 授权文件。
 
 [部署文档](DEPLOYMENT.md) · [Web 说明](WEB.md)
+
+## 快速开始
+
+一共三步：**启动服务 → 创建管理员 → 配置邮箱服务商**。第三步不做完注册一定失败，因为模板配置里的邮箱地址是占位值。
+
+### 第 1 步 · 启动服务
+
+两种方式选一种即可。
+
+#### 方式 A · 本机运行（建议先用它跑通）
+
+需要 Python 3.10+。另外建议装 Node.js 22+ 用来构建控制台页面（不装也能启动，但首页会返回 503，只有 API 可用）。
+
+```bash
+git clone https://github.com/JamesZhaoY/grok-register.git
+cd grok-register
+
+scripts/start-macos.sh --open      # macOS
+scripts/start-linux.sh --open      # Linux（无桌面的服务器再加 --xvfb）
+```
+
+Windows 在 PowerShell 里执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-windows.ps1 -Open
+```
+
+也可以直接双击 `scripts\start-windows.bat`。
+
+脚本按顺序自动准备 `.venv` → Python 依赖 → Camoufox 浏览器引擎 → `config.json` → 前端产物，然后拉起控制台。
+**首次运行需要下载几百 MB 的浏览器引擎，慢是正常的**，之后再启动只要几秒。`Ctrl+C` 停止服务。
+
+不确定环境是否齐全，可以先体检（只检查，不启动服务）：
+
+```bash
+scripts/start-macos.sh --check
+```
+
+#### 方式 B · Docker
+
+宿主机只需要 Docker 和 Docker Compose，不需要 Python、Node 和桌面环境。
+
+```bash
+git clone https://github.com/JamesZhaoY/grok-register.git
+cd grok-register
+cp .env.example .env
+docker compose up -d --build
+```
+
+容器内用 **Xvfb + 有头 Camoufox**，所以无桌面的 Linux 服务器也能跑；Docker 模式会强制关闭无头模式。
+完整说明见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
+### 第 2 步 · 打开控制台并创建管理员
+
+```text
+http://127.0.0.1:8787
+```
+
+第一次访问会进入初始化页面：填账号（至少 3 个字符）和两遍密码（至少 8 个字符）就完成了。
+**整个系统只能创建一个管理员**，之后没有新增账号的入口。凭据以哈希形式保存在 `data/web_auth.json`，
+忘记密码只能删掉这个文件重新初始化。
+
+页面显示 `503 Web UI 未构建` 说明前端没编译。装好 Node.js 22+ 后重新构建：
+
+```bash
+scripts/start-macos.sh --rebuild-web     # 或 cd front && npm install && npm run build
+```
+
+### 第 3 步 · 配置邮箱服务商，然后启动注册
+
+登录后进入 **系统设置 → 邮箱服务**。默认服务商是 Cloudflare 临时邮箱，而模板里的地址
+`https://temp-mail.example.com` 只是占位符，**不改就注册不了**。
+
+最省事的选择是 **DuckMail / Mail.tm**：用公共接口时 API Key 可以留空。各服务商需要填什么：
+
+| 邮箱服务商 | 需要填写 |
+| --- | --- |
+| DuckMail / Mail.tm | 公共接口可全部留空；用 DuckMail 自有配额时填 API Key |
+| Cloudflare 临时邮箱 | 自建 Worker / API 地址、鉴权方式、收信路径 |
+| VMail 临时邮箱 | API Key（vmail.dev / mail.22y.uk Open API） |
+| YYDS 临时邮箱 | API Key 或 JWT，可固定已验证域名 |
+| MailNest 迈巢 Outlook | API Key + 项目代码 |
+| CloudMail 自建邮箱 | 站点地址、管理员账号密码、域名 |
+| OutlookEmail 邮箱池 | 邮箱池地址 + API Key，见 [DEPLOYMENT.md](DEPLOYMENT.md#可选-outlookemail-邮箱池) |
+
+注册过程要能访问 x.ai。网络不通时在 **系统设置 → 基础注册** 填 `proxy`，例如 `http://127.0.0.1:7897`。
+
+保存配置后进入 **启动注册** 页：
+
+1. 填注册数量和并发数（上限分别是 100000 和 10）
+2. 点 **连通检查** 确认代理与 x.ai 可达；被 Cloudflare 拦住时整批任务会直接终止
+3. 点 **开始注册**，右侧实时日志会输出每一步
+
+成功的账号写入 `data/accounts/`，授权 JSON 写入 `data/cpa_auth/` 和 `data/grok2api_auth/`，
+在 **账号管理** 页可以筛选、查看、复制和下载。失败会记录失败类型，并在可能时保存现场截图。
+
+## 启动脚本参数
+
+Linux / macOS 用双横线，Windows 换成单横线（`--host` 对应 `-BindHost`）：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--host 0.0.0.0` | 允许局域网访问，默认只监听 `127.0.0.1` |
+| `--port 9000` | 更换监听端口 |
+| `--check` | 只体检环境（Python、依赖、引擎、端口、配置、前端），不启动服务 |
+| `--open` | 启动后自动打开浏览器 |
+| `--skip-install` | 跳过依赖安装与前端构建，直接启动 |
+| `--rebuild-web` | 强制重新构建前端 |
+| `--docker` | 改用 `docker compose` 部署，等价于手敲 compose 命令 |
+| `--with-outlookemail` | 配合 `--docker`，同时启动可选 OutlookEmail 邮箱池 |
+| `--xvfb` | 仅 Linux：无桌面服务器时套 Xvfb 跑有头 Camoufox |
 
 ## 界面预览
 
@@ -21,34 +133,12 @@
 - Web 控制台：任务进度、实时日志、账号管理和系统设置
 - Camoufox 浏览器，支持多 worker 和异常进程清理
 - 支持 Cloudflare、DuckMail / Mail.tm、YYDS、MailNest、OutlookEmail、CloudMail、VMail（mail.22y.uk）
-- 注册完成后生成 CPA / Grok2API JSON
-- JSON 查看、复制和下载
+- 注册完成后生成 CPA / Grok2API JSON，支持查看、复制、下载和自动导入远程站点
 - 首次访问创建唯一管理员账号
 - Docker Compose 部署，支持无桌面 Linux 服务器
 - Linux / macOS / Windows 一键启动脚本，自动准备虚拟环境、依赖、浏览器引擎和前端产物
-- GitHub Actions 自动构建 GHCR 镜像
 
-## Docker 快速启动
-
-宿主机只需安装 Docker 和 Docker Compose。
-
-```bash
-git clone https://github.com/kaibush/grok-register.git
-cd grok-register
-cp .env.example .env
-docker compose build
-docker compose up -d
-```
-
-也可以用一键脚本代跑上面的 compose 命令（会自动生成 `.env`）：
-
-```bash
-scripts/start-linux.sh --docker                       # Linux
-scripts/start-macos.sh --docker                       # macOS（Docker Desktop）
-powershell -File scripts\start-windows.ps1 -Docker    # Windows
-```
-
-访问：`http://服务器IP:8787`
+## Docker 部署
 
 查看状态和日志：
 
@@ -58,15 +148,20 @@ docker compose logs -f grok-register
 curl http://127.0.0.1:8787/api/health
 ```
 
-容器内使用 **Xvfb + 有头 Camoufox**，服务器不需要桌面环境。Docker 模式会强制关闭无头模式。
+停止和更新：
 
-如果配置里的代理是 `127.0.0.1:7897`，Compose 会自动映射到宿主机代理。宿主机代理软件需要允许局域网连接（监听 `0.0.0.0` 或 Docker 网桥地址）。
+```bash
+docker compose down
+git pull && docker compose up -d --build
+```
 
-完整说明见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+如果配置里的代理是 `127.0.0.1:7897`，Compose 会自动映射到宿主机代理。宿主机代理软件需要允许局域网连接
+（监听 `0.0.0.0` 或 Docker 网桥地址）。
 
 ### 可选 OutlookEmail 邮箱池
 
-Compose 已集成 [`ghcr.io/assast/outlookemail:latest`](https://github.com/assast/outlookEmail)，默认不随主服务启动。需要选择 OutlookEmail 邮箱、导入账号或读取邮件时，在 `.env` 修改登录密码和 `SECRET_KEY`，然后启动可选 profile：
+Compose 已集成 [`ghcr.io/assast/outlookemail:latest`](https://github.com/assast/outlookEmail)，默认不随主服务启动。
+需要选择 OutlookEmail 邮箱、导入账号或读取邮件时，在 `.env` 修改登录密码和 `SECRET_KEY`，然后启动可选 profile：
 
 ```bash
 docker compose --profile outlookemail up -d
@@ -79,41 +174,21 @@ Grok Register: http://服务器IP:8787
 OutlookEmail:  http://服务器IP:5000
 ```
 
-`5000` 默认映射到宿主机所有网卡。主容器内的 API Base 使用：
-
-```text
-http://outlook-email:5000
-```
-
-Docker 首次生成 `data/config.json` 时会预填该内部地址；已有配置可在“系统设置 → Outlook 邮箱池”中填写。
-
-OutlookEmail 数据保存在 `outlookemail-data/`，并已被 Git 和 Docker 构建上下文忽略。完整配置见 [DEPLOYMENT.md](DEPLOYMENT.md#可选-outlookemail-邮箱池)。
+主容器内的 API Base 使用内部服务名 `http://outlook-email:5000`（Docker 首次生成 `data/config.json` 时会预填），
+已有配置可在“系统设置 → Outlook 邮箱池”中填写。数据保存在 `outlookemail-data/`，已被 Git 和 Docker 构建上下文忽略。
+完整配置见 [DEPLOYMENT.md](DEPLOYMENT.md#可选-outlookemail-邮箱池)。
 
 ## 配置文件
 
-### 本机运行
+| 运行方式 | 读取路径 |
+| --- | --- |
+| 本机运行 | 项目根目录 `config.json` |
+| Docker | 宿主机 `data/config.json` |
 
-读取根目录：
+两种方式的配置文件都由 `scripts/seed_config.py` 按 [`config.example.json`](config.example.json) 生成：
+缺失时创建，已存在时只补齐模板里的新增键、不覆盖已填写的值。所以**平时直接在 Web 的“系统设置”里改就行**。
 
-```text
-config.json
-```
-
-首次使用：
-
-```bash
-cp config.example.json config.json
-```
-
-### Docker 运行
-
-读取宿主机：
-
-```text
-data/config.json
-```
-
-使用已有的本地配置：
+把现有本地配置搬到 Docker：
 
 ```bash
 mkdir -p data
@@ -121,72 +196,13 @@ cp config.json data/config.json
 docker compose restart grok-register
 ```
 
-也可以在 Web 的“系统设置”中修改配置。
-
-Docker 配置中的授权目录建议保持：
+Docker 配置中的授权目录建议保持指向挂载卷：
 
 ```json
 {
   "cpa_auth_dir": "data/cpa_auth",
-  "grok2api_auth_dir": "data/grok2api_auth",
-  "grok2api_remote_url": "https://grok2api.example.com",
-  "grok2api_remote_username": "admin",
-  "grok2api_remote_password": "change-me",
-  "grok2api_auto_import": true
+  "grok2api_auth_dir": "data/grok2api_auth"
 }
-```
-
-## 本机运行
-
-要求：Python 3.10+、Node.js 22+（缺 Node 也能启动，只是控制台页面会返回 503，API 仍可用）。
-
-一键脚本会依次准备 `.venv`、Python 依赖、Camoufox 引擎、`config.json` 和前端产物，然后拉起控制台：
-
-```bash
-scripts/start-linux.sh        # Linux
-scripts/start-macos.sh        # macOS
-```
-
-```powershell
-# Windows：PowerShell 里执行，或直接双击 scripts\start-windows.bat
-powershell -ExecutionPolicy Bypass -File scripts\start-windows.ps1
-```
-
-访问：`http://127.0.0.1:8787`
-
-常用参数（Windows 换成单横线，如 `-Port 9000`；`--host` 对应 `-BindHost`）：
-
-| 参数 | 说明 |
-| --- | --- |
-| `--host 0.0.0.0` | 允许局域网访问，默认只监听 `127.0.0.1` |
-| `--port 9000` | 更换监听端口 |
-| `--check` | 只体检环境（Python、依赖、引擎、端口、配置、前端），不启动服务 |
-| `--open` | 启动后自动打开浏览器 |
-| `--skip-install` | 跳过依赖安装与前端构建，直接启动 |
-| `--rebuild-web` | 强制重新构建前端 |
-| `--docker` | 改用 `docker compose` 部署，等价于手敲 compose 命令 |
-| `--xvfb` | 仅 Linux：无桌面服务器时套 Xvfb 跑有头 Camoufox |
-
-手动步骤（等价于脚本做的事）：
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m camoufox fetch
-
-cd front
-npm install
-npm run build
-cd ..
-
-cp config.example.json config.json
-./start-web.sh
-```
-
-Windows 手动启动：
-
-```powershell
-.venv\Scripts\python.exe -m backend.web.cli --host 127.0.0.1 --port 8787
 ```
 
 ## 主要配置
@@ -210,23 +226,22 @@ Windows 手动启动：
 | `grok2api_remote_password` | 远程 Grok2API 管理员密码 |
 | `grok2api_auto_import` | JSON 生成后自动登录并导入远程 Grok2API |
 
-配置模板见 [`config.example.json`](config.example.json)。
-
 ## 数据目录
 
 ```text
 data/
 ├── config.json                   # Docker 配置
 ├── web_auth.json                 # Web 管理员认证
-├── accounts/                     # 账号和注册结果
+├── accounts/                     # 账号和注册结果（含 SQLite 结果库）
 ├── cpa_auth/                     # CPA JSON
-└── grok2api_auth/                # Grok2API JSON
+├── grok2api_auth/                # Grok2API JSON
+└── screenshots/                  # 注册失败现场截图
 
 logs/                             # 运行日志
 outlookemail-data/                # 可选 OutlookEmail 数据
 ```
 
-`data/`、`logs/` 和本地 `config.json` 已被 Git 忽略。
+`data/`（除说明文件）、`logs/`、本地 `config.json` 和 `.env` 都已被 Git 忽略，里面是实时凭据，不要提交。
 
 ## 常用命令
 
@@ -234,57 +249,85 @@ outlookemail-data/                # 可选 OutlookEmail 数据
 # 体检本机环境（不启动服务）
 scripts/start-macos.sh --check
 
-# 停止服务
-docker compose down
-
-# 更新本地构建
-git pull
-docker compose up -d --build
-
-# 验证有头 Camoufox
-docker compose run --rm grok-register python /app/docker/camoufox_smoke.py
-
 # 后端测试
 .venv/bin/python -m unittest discover -s backend/tests -v
 
 # 前端构建
 cd front && npm run build
+
+# 验证容器内的有头 Camoufox
+docker compose run --rm grok-register python /app/docker/camoufox_smoke.py
 ```
 
 ## 常见问题
 
-### Docker 修改配置后未生效
+### 打开首页是 503 「Web UI 未构建」
 
-Docker 读取 `data/config.json`，不是根目录 `config.json`。修改后执行：
+前端没编译。装好 Node.js 22+ 后执行 `scripts/start-macos.sh --rebuild-web`，
+或手动 `cd front && npm install && npm run build`。API（含 `/api/docs`）在未构建时仍可用。
+
+### 登录之后立刻被弹回登录页
+
+会话 Cookie 默认带 `Secure` 标记，浏览器在纯 HTTP 页面下会直接丢弃它（尤其是用局域网 IP 访问时）。
+本机运行改成：
 
 ```bash
-docker compose restart grok-register
+GROK_WEB_COOKIE_SECURE=0 scripts/start-macos.sh --host 0.0.0.0
 ```
 
-### Camoufox 未安装
+Docker 的 `.env` 默认已是 `GROK_WEB_COOKIE_SECURE=0`；反过来，用 HTTPS 域名部署时要设成 `1`，
+然后 `docker compose up -d --force-recreate`。
+
+### 忘记管理员密码
+
+删除 `data/web_auth.json` 后重新访问，会再次进入初始化页面。该文件是唯一凭据来源，删除前请确认。
+
+### 端口被占用
+
+启动脚本会直接拒绝启动。换端口：`scripts/start-macos.sh --port 9000`；
+Docker 改 `.env` 里的 `GROK_WEB_PORT` 再 `docker compose up -d --force-recreate`。
+
+### Camoufox 没装好
 
 ```bash
 .venv/bin/python -m camoufox fetch
 .venv/bin/python -m camoufox version
 ```
 
-### 公网 HTTPS 登录状态异常
+macOS 首次启动浏览器会被 Gatekeeper 拦一次，在「系统设置 → 隐私与安全性」里放行即可。
 
-在 `.env` 中设置：
+### Docker 改了配置没生效
 
-```dotenv
-GROK_WEB_COOKIE_SECURE=1
-```
-
-然后重建容器：
+Docker 读的是 `data/config.json`，不是根目录的 `config.json`。改完执行：
 
 ```bash
-docker compose up -d --force-recreate
+docker compose restart grok-register
 ```
 
-### CPA 没有出现新账号
+### 注册一直失败 / CPA 没有出现新账号
 
-检查 `cpa_auto_add`、`cpa_auth_dir`，或远程配置 `cpa_remote_url`、`cpa_management_key`，并查看日志中的 `[CPA]` 信息。
+先在注册页点 **连通检查**。再检查邮箱服务商配置是否填全、`proxy` 是否可用；
+CPA 相关看 `cpa_auto_add`、`cpa_auth_dir`，或远程配置 `cpa_remote_url`、`cpa_management_key`，
+并在日志里搜 `[CPA]`。注意 CPA / Grok2API 入库失败的账号会被记成失败，不计入成功数。
+
+## 手动启动（不用脚本）
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m camoufox fetch
+
+cd front && npm install && npm run build && cd ..
+cp config.example.json config.json
+
+.venv/bin/python -m backend.web.cli --host 127.0.0.1 --port 8787
+```
+
+Windows：
+
+```powershell
+.venv\Scripts\python.exe -m backend.web.cli --host 127.0.0.1 --port 8787
+```
 
 ## 项目结构
 
@@ -298,14 +341,9 @@ backend/                Python 后端
   mailbox/              邮箱渠道适配
   shared/               公共路径等基础设施
 backend/tests/          后端测试
-docker/                 容器启动与浏览器验证
 scripts/                一键启动脚本与共用配置生成
+docker/                 容器启动与浏览器验证
 docs/images/            Web 界面截图
-.github/workflows/      GitHub Actions
-data/                   运行数据
-  screenshots/          浏览器注册失败现场截图
-logs/                   运行日志
-outlookemail-data/      可选 OutlookEmail 数据
 compose.yaml            Docker Compose 配置
 ```
 
@@ -316,3 +354,10 @@ compose.yaml            Docker Compose 配置
 ## License
 
 [MIT](LICENSE)
+
+
+
+
+
+
+
