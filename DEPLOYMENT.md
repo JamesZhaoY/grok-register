@@ -213,7 +213,17 @@ GitHub Actions 规则：
 
 ## 本机 Python 运行
 
-要求：Python 3.10+、Node.js 22+。
+要求：Python 3.10+、Node.js 22+。Linux 还需要 Camoufox（Firefox 分支）的图形运行库，否则注册时
+浏览器会以 `libgtk-3.so.0: cannot open shared object file` 失败：
+
+```bash
+sudo .venv/bin/python -m playwright install-deps firefox            # Debian/Ubuntu，推荐
+sudo dnf install -y gtk3 alsa-lib dbus-glib libXt libXtst nss       # RHEL/Fedora
+sudo pacman -S --needed gtk3 alsa-lib dbus-glib libxt libxtst nss   # Arch
+```
+
+`scripts/start-linux.sh --check` 会用 `ldd` 扫引擎目录，缺库时直接列出 soname。Docker 部署不需要这一步，
+镜像里已经装好（清单见 `Dockerfile` 的 runtime 阶段）。
 
 一键脚本会准备 `.venv`、依赖、Camoufox 引擎、`config.json` 与前端产物后启动控制台：
 

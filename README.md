@@ -16,6 +16,11 @@
 #### 方式 A · 本机运行（建议先用它跑通）
 
 需要 Python 3.10+。另外建议装 Node.js 22+ 用来构建控制台页面（不装也能启动，但首页会返回 503，只有 API 可用）。
+**Linux 还要装 GTK 等图形运行库**，不然浏览器起不来（详见下方常见问题「Linux 浏览器起不来」）：
+
+```bash
+sudo apt install -y libgtk-3-0 libasound2 libdbus-glib-1-2 libx11-xcb1 libxt6 libxtst6
+```
 
 ```bash
 git clone https://github.com/JamesZhaoY/grok-register.git
@@ -301,6 +306,35 @@ Docker 改 `.env` 里的 `GROK_WEB_PORT` 再 `docker compose up -d --force-recre
 ```
 
 macOS 首次启动浏览器会被 Gatekeeper 拦一次，在「系统设置 → 隐私与安全性」里放行即可。
+
+### Linux 浏览器起不来
+
+日志里出现下面任意一行，都是**宿主机缺系统库**，不是 Camoufox 没下载好：
+
+```text
+libgtk-3.so.0: cannot open shared object file: No such file or directory
+XPCOMGlueLoad error for file .../libmozgtk.so
+Couldn't load XPCOM.
+```
+
+Camoufox 是 Firefox 分支，`camoufox fetch` 只下引擎，GTK 这些图形库得由系统提供。装依赖：
+
+```bash
+sudo .venv/bin/python -m playwright install-deps firefox            # Debian/Ubuntu，推荐
+sudo apt install -y libgtk-3-0 libasound2 libdbus-glib-1-2 \
+     libx11-xcb1 libxt6 libxtst6 libnss3                            # 手动装也行
+sudo dnf install -y gtk3 alsa-lib dbus-glib libXt libXtst nss       # RHEL/Fedora
+sudo pacman -S --needed gtk3 alsa-lib dbus-glib libxt libxtst nss   # Arch
+```
+
+装完不用重新 fetch 引擎，直接重新点「开始注册」。`scripts/start-linux.sh --check` 会用 `ldd`
+扫引擎目录，提前把缺的库名列出来。同一行日志里的
+`Sandbox: CanCreateUserNamespace() unshare(CLONE_NEWPID): EPERM` 只是伴随告警，不是失败原因。
+
+装不上系统库（比如受限的共享主机）就改用 Docker 部署，镜像自带全部依赖。
+
+库装齐后如果改报显示器相关的错，说明配置里关了无头模式而服务器没有桌面：用
+`scripts/start-linux.sh --xvfb` 启动，或在「系统设置 → 基础注册」打开无头浏览器。
 
 ### Docker 改了配置没生效
 

@@ -201,6 +201,57 @@ ensure_camoufox() {
   ok "Camoufox 引擎就绪"
 }
 
+camoufox_browser_dir() {
+  local root bin
+  root="$("$PY" -m camoufox path 2>/dev/null | tail -1 || true)"
+  [[ -n "$root" ]] || return 1
+  bin="$(find "$root/browsers" -maxdepth 4 -type f -name 'camoufox-bin' 2>/dev/null | head -n 1)"
+  [[ -n "$bin" ]] || return 1
+  dirname "$bin"
+}
+
+missing_browser_libs() {
+  # Camoufox 是 Firefox 分支：缺 GTK 这类图形库时 fetch 阶段一切正常，
+  # 只有真正 launch 才报 "libgtk-3.so.0: cannot open shared object file"。
+  # 这里用 ldd 扫引擎目录，把缺的 soname 在启动阶段就列出来。
+  local dir
+  [[ "$(uname -s)" == "Linux" ]] || return 0
+  has ldd || return 0
+  dir="$(camoufox_browser_dir)" || return 0
+  {
+    ldd "$dir/camoufox-bin" 2>/dev/null || true
+    find "$dir" -maxdepth 1 -type f -name '*.so' -exec ldd {} + 2>/dev/null || true
+  } | awk '/not found/ {print $1}' | sort -u
+}
+
+browser_libs_install_hint() {
+  if has apt-get; then
+    printf 'sudo %s -m playwright install-deps firefox\n' "${PY:-python3}"
+  elif has dnf; then
+    printf 'sudo dnf install -y gtk3 alsa-lib dbus-glib libXt libXtst nss\n'
+  elif has pacman; then
+    printf 'sudo pacman -S --needed gtk3 alsa-lib dbus-glib libxt libxtst nss\n'
+  elif has zypper; then
+    printf 'sudo zypper install -y gtk3 alsa-lib dbus-1-glib libXt6 libXtst6 mozilla-nss\n'
+  else
+    printf '按发行版装齐 GTK3 / ALSA / dbus-glib / libXt / libXtst / NSS 运行库\n'
+  fi
+}
+
+report_browser_libs() {
+  local level="${1:-warn}" missing flat
+  missing="$(missing_browser_libs)"
+  [[ -n "$missing" ]] || return 0
+  flat="$(printf '%s' "$missing" | tr '\n' ' ')"
+  flat="${flat% }"
+  case "$level" in
+    bad) bad "缺少 Camoufox 需要的系统库: ${flat}" ;;
+    *) warn "缺少 Camoufox 需要的系统库: ${flat}（不装浏览器起不来）" ;;
+  esac
+  printf '    修复: %s\n' "$(browser_libs_install_hint)"
+  printf '    装不上系统库就改用 Docker 部署，镜像自带全部依赖\n'
+}
+
 config_path() {
   printf '%s\n' "${GROK_CONFIG_FILE:-$ROOT_DIR/config.json}"
 }
@@ -336,6 +387,7 @@ run_check() {
     fi
     if camoufox_ready; then
       ok "Camoufox 浏览器引擎已下载"
+      report_browser_libs bad
     else
       warn "Camoufox 引擎未下载（启动时自动下载，约数百 MB）"
     fi
@@ -402,6 +454,7 @@ run_serve() {
     ensure_frontend
   fi
   ensure_config
+  report_browser_libs warn
   if port_busy; then
     die "端口 ${PORT} 已被占用：改用 --port 换端口，或先停掉占用进程"
   fi

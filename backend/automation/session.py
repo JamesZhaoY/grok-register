@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import gc
 import os
+import re
 import signal
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -547,6 +549,45 @@ def create_browser_options(unique_profile=True) -> dict:
     return opts
 
 
+# Camoufox 是 Firefox 分支，Linux 上缺少 GTK 等图形运行库时 `camoufox fetch` 不会报错，
+# 只有真正 launch 的那一刻才会吐 "libgtk-3.so.0: cannot open shared object file"。
+# 这类失败是宿主机缺件，重试只会把同一个错误刷 4 遍，所以单独识别并直接给出修复命令。
+_MISSING_LIB_RE = re.compile(
+    r"([A-Za-z0-9_.+-]+\.so(?:\.[0-9]+)*)\s*:\s*cannot open shared object file"
+)
+_MISSING_LIB_MARKERS = (
+    "cannot open shared object file",
+    "error while loading shared libraries",
+    "couldn't load xpcom",
+)
+
+
+def missing_system_library_error(text) -> str:
+    """识别“缺系统库”类启动失败，返回可直接执行的中文修复提示。
+
+    不属于这类失败时返回空串，调用方继续走原来的重试逻辑。
+    """
+    raw = str(text or "")
+    low = raw.lower()
+    if not any(marker in low for marker in _MISSING_LIB_MARKERS):
+        return ""
+    names = []
+    for name in _MISSING_LIB_RE.findall(raw):
+        if name not in names:
+            names.append(name)
+    libs = "、".join(names) if names else "图形相关的共享库"
+    python_exe = sys.executable or "python3"
+    return (
+        f"浏览器启动失败：系统缺少 Camoufox 需要的共享库（{libs}）。\n"
+        "Camoufox 是 Firefox 分支，光下载引擎不够，宿主机还要装 GTK 等图形运行库。任选一种修复：\n"
+        f"  Debian/Ubuntu: sudo {python_exe} -m playwright install-deps firefox\n"
+        "  RHEL/Fedora:   sudo dnf install -y gtk3 alsa-lib dbus-glib libXt libXtst nss\n"
+        "  Arch:          sudo pacman -S --needed gtk3 alsa-lib dbus-glib libxt libxtst nss\n"
+        "  或改用 Docker 部署，镜像自带全部依赖。\n"
+        "装完直接重新开始注册即可，不用重新下载浏览器引擎。"
+    )
+
+
 def start_browser(log_callback=None) -> Tuple[object, object]:
     """启动 Camoufox 浏览器，返回 (CamoufoxBrowser, CamoufoxPage)。
 
@@ -621,6 +662,10 @@ def start_browser(log_callback=None) -> Tuple[object, object]:
                 pass
             set_browser_session(None, None)
             _cleanup_profile_dir(profile_dir)
+            # 缺系统库是环境问题，重试改变不了结果，直接抛出带修复命令的错误
+            lib_error = missing_system_library_error(f"{exc}")
+            if lib_error:
+                raise RuntimeError(lib_error) from exc
             time.sleep(min(1.5 * attempt, 4))
     raise Exception(f"浏览器启动失败，已重试4次: {last_exc}")
 

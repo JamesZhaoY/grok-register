@@ -41,7 +41,7 @@ Run the server (defaults come from `GROK_WEB_HOST` / `GROK_WEB_PORT`; uvicorn fa
 cd front && npm run dev                                           # Vite dev server, proxies /api -> 127.0.0.1:8787
 ```
 
-Tests are plain `unittest` (no pytest, no conftest); 114 tests across 20 modules in `backend/tests/`:
+Tests are plain `unittest` (no pytest, no conftest); 120 tests across 21 modules in `backend/tests/`:
 
 ```bash
 .venv/bin/python -m unittest discover -s backend/tests -v         # full suite
@@ -50,11 +50,11 @@ Tests are plain `unittest` (no pytest, no conftest); 114 tests across 20 modules
 ```
 
 `python -m unittest test_signup_flow` (bare module name) fails with `ModuleNotFoundError`; always use the
-`backend.tests.*` dotted path. Four of the 114 do not pass on macOS and that is expected, not a
+`backend.tests.*` dotted path. Four of the 120 do not pass on macOS and that is expected, not a
 regression: three path-equality assertions in `test_auth_artifact_loading.py` and
 `test_failure_screenshots.py` break because `Path.resolve()` rewrites `/var/folders/...` to
 `/private/var/folders/...`, and `test_browser_lifecycle.CamoufoxProcessMatchTests` errors because
-`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "110 ok + those 4".
+`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "116 ok + those 4".
 
 The runtime Python is whatever the launcher's `PYTHON_CANDIDATES` finds first, which on a fresh box can be
 3.14 — so the source must stay **PEP 765 clean**: no `break` / `continue` / `return` that exits a `finally`
@@ -190,6 +190,15 @@ independent browsers. `IsolatedCamoufox` subclasses Camoufox and overrides `__en
 There is a kill switch (`block_browser_launches()` / `allow_browser_launches()`, a `threading.Event`) plus
 `kill_all_camoufox_processes()` (Linux-only, walks `/proc`) and `cleanup_stale_profiles()` for temp profile
 dirs tagged `grok-register-camoufox`.
+
+`start_browser()` retries 4 times with backoff, with one deliberate exception: when the Playwright error
+text carries a missing-shared-library signature (`missing_system_library_error()` matches
+`cannot open shared object file` / `Couldn't load XPCOM`), it raises immediately with the soname and the
+per-distro install command. Camoufox is a Firefox fork, so `camoufox fetch` succeeds on a host with no GTK
+and the failure only surfaces at launch time; retrying a missing `.so` four times just buries the cause.
+The message must keep containing `浏览器` so `engine.classify_failure()` still maps it to `FAIL_BROWSER`.
+The launchers front-run the same problem: `report_browser_libs()` in `scripts/_lib.sh` `ldd`s the engine
+directory (Linux only, `bad` in `--check`, `warn` before serving) and lists the missing sonames.
 
 `automation/page_adapter.py` translates DrissionPage-style selectors — `tag:button`, `@id=x`, `text:x`,
 `xpath=//x` — into Playwright/CSS and exposes `CamoufoxPage` / `CamoufoxElement` / `_ElementStates` /
