@@ -1,9 +1,12 @@
-# syntax=docker/dockerfile:1.7
+# 刻意不写 `# syntax=` 前端指令，也不用 RUN --mount / COPY --chmod 这类只有 BuildKit 认识的写法：
+# 只装了 docker.io（没有 buildx 插件）的宿主机走旧版构建器，遇到它们会直接报
+# "the --mount option requires BuildKit" 让整个 docker compose build 失败。
+# 该约束由 backend/tests/test_dockerfile_compatibility.py 固定。
 
 FROM node:22-bookworm-slim AS frontend-builder
 WORKDIR /build/front
 COPY front/package.json front/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN npm ci
 COPY front/ ./
 RUN npm run build
 
@@ -73,11 +76,13 @@ COPY --chown=app:app --from=python-builder /opt/camoufox-cache /opt/camoufox-cac
 COPY --chown=app:app backend/ ./backend/
 COPY --chown=app:app config.example.json requirements.txt ./
 COPY --chown=app:app --from=frontend-builder /build/front/dist ./front/dist/
-COPY --chown=app:app --chmod=755 docker/entrypoint.sh ./docker/entrypoint.sh
+COPY --chown=app:app docker/entrypoint.sh ./docker/entrypoint.sh
 COPY --chown=app:app docker/camoufox_smoke.py ./docker/camoufox_smoke.py
 COPY --chown=app:app scripts/seed_config.py ./scripts/seed_config.py
 
-RUN install -d -o app -g app /app/data /app/logs
+# chmod 单独做：COPY --chmod 是 BuildKit 专属语法，旧版构建器不认。
+RUN install -d -o app -g app /app/data /app/logs \
+    && chmod 755 /app/docker/entrypoint.sh
 
 VOLUME ["/app/data", "/app/logs"]
 EXPOSE 8787

@@ -41,7 +41,7 @@ Run the server (defaults come from `GROK_WEB_HOST` / `GROK_WEB_PORT`; uvicorn fa
 cd front && npm run dev                                           # Vite dev server, proxies /api -> 127.0.0.1:8787
 ```
 
-Tests are plain `unittest` (no pytest, no conftest); 120 tests across 21 modules in `backend/tests/`:
+Tests are plain `unittest` (no pytest, no conftest); 123 tests across 21 test modules in `backend/tests/`:
 
 ```bash
 .venv/bin/python -m unittest discover -s backend/tests -v         # full suite
@@ -50,11 +50,11 @@ Tests are plain `unittest` (no pytest, no conftest); 120 tests across 21 modules
 ```
 
 `python -m unittest test_signup_flow` (bare module name) fails with `ModuleNotFoundError`; always use the
-`backend.tests.*` dotted path. Four of the 120 do not pass on macOS and that is expected, not a
+`backend.tests.*` dotted path. Four of the 123 do not pass on macOS and that is expected, not a
 regression: three path-equality assertions in `test_auth_artifact_loading.py` and
 `test_failure_screenshots.py` break because `Path.resolve()` rewrites `/var/folders/...` to
 `/private/var/folders/...`, and `test_browser_lifecycle.CamoufoxProcessMatchTests` errors because
-`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "116 ok + those 4".
+`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "119 ok + those 4".
 
 The runtime Python is whatever the launcher's `PYTHON_CANDIDATES` finds first, which on a fresh box can be
 3.14 — so the source must stay **PEP 765 clean**: no `break` / `continue` / `return` that exits a `finally`
@@ -76,6 +76,14 @@ docker compose up -d
 docker compose --profile outlookemail up -d    # also start the bundled outlook-email service
 docker compose run --rm grok-register python /app/docker/camoufox_smoke.py   # in-container browser check
 ```
+
+The `Dockerfile` must stay buildable by the **legacy (pre-BuildKit) builder**: a host with only the distro
+`docker.io` package has no buildx plugin, so `docker compose build` falls back to the classic build API —
+where `RUN --mount=type=cache`, `COPY --chmod`, `COPY --link`, `RUN <<EOF` heredocs and a `# syntax=`
+frontend directive are hard failures (`the --mount option requires BuildKit`), not silent downgrades, and
+`DOCKER_BUILDKIT=1` cannot rescue that path. `backend/tests/test_dockerfile_compatibility.py` scans for all
+five. `--chown` and multi-stage `COPY --from` are fine. Consequence: `entrypoint.sh` gets its exec bit from
+`chmod 755` inside the `install -d` RUN layer, not from `COPY --chmod`.
 
 ### Launcher / container scripts
 

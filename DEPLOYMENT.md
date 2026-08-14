@@ -4,7 +4,7 @@ Docker Compose 是推荐方式。容器内使用 Xvfb 运行有头 Camoufox，�
 
 ## Docker Compose：本地构建
 
-要求：Docker Engine、Docker Compose。
+要求：Docker Engine、Docker Compose。buildx 插件可选——镜像刻意不使用 BuildKit 专属语法，旧版构建器也能构建。
 
 ```bash
 cp .env.example .env
@@ -281,6 +281,31 @@ GROK_WEB_BIND=127.0.0.1
 多并发时可在 `.env` 提高 `GROK_SHM_SIZE`。
 
 ## 常见问题
+
+### 构建报 the --mount option requires BuildKit
+
+宿主机只装了发行版 `docker.io`、没有 buildx 插件时，`docker compose build` 会退回旧版构建器
+（日志里是 `Sending build context to Docker daemon` 和 `Step 4/37` 这种输出），报错长这样：
+
+```text
+WARN[0000] Docker Compose requires buildx plugin to be installed
+the --mount option requires BuildKit. Refer to https://docs.docker.com/go/buildkit/
+```
+
+镜像已经改成旧版构建器可直接构建，`git pull` 后重跑即可：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+compose 退回旧版构建器时走的是 classic build API，单独 `export DOCKER_BUILDKIT=1` 不生效。想让构建更快、
+能复用 npm/apt 缓存，就装官方 buildx 插件（可选）：
+
+```bash
+sudo apt install -y docker-buildx-plugin
+docker buildx version
+```
 
 ### 配置未生效
 

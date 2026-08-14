@@ -336,6 +336,12 @@ sudo pacman -S --needed gtk3 alsa-lib dbus-glib libxt libxtst nss   # Arch
 库装齐后如果改报显示器相关的错，说明配置里关了无头模式而服务器没有桌面：用
 `scripts/start-linux.sh --xvfb` 启动，或在「系统设置 → 基础注册」打开无头浏览器。
 
+### Docker 构建报 the --mount option requires BuildKit
+
+宿主机没装 buildx 插件，`docker compose build` 退回了旧版构建器。镜像已经改成旧语法可构建，
+`git pull` 后重跑 `docker compose up -d --build` 即可；`export DOCKER_BUILDKIT=1` 对 compose 无效。
+详见 [DEPLOYMENT.md](DEPLOYMENT.md#构建报-the---mount-option-requires-buildkit)。
+
 ### Docker 改了配置没生效
 
 Docker 读的是 `data/config.json`，不是根目录的 `config.json`。改完执行：
