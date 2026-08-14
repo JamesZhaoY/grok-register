@@ -41,7 +41,7 @@ Run the server (defaults come from `GROK_WEB_HOST` / `GROK_WEB_PORT`; uvicorn fa
 cd front && npm run dev                                           # Vite dev server, proxies /api -> 127.0.0.1:8787
 ```
 
-Tests are plain `unittest` (no pytest, no conftest); 108 tests across 19 modules in `backend/tests/`:
+Tests are plain `unittest` (no pytest, no conftest); 109 tests across 20 modules in `backend/tests/`:
 
 ```bash
 .venv/bin/python -m unittest discover -s backend/tests -v         # full suite
@@ -50,11 +50,19 @@ Tests are plain `unittest` (no pytest, no conftest); 108 tests across 19 modules
 ```
 
 `python -m unittest test_signup_flow` (bare module name) fails with `ModuleNotFoundError`; always use the
-`backend.tests.*` dotted path. Four of the 108 do not pass on macOS and that is expected, not a
+`backend.tests.*` dotted path. Four of the 109 do not pass on macOS and that is expected, not a
 regression: three path-equality assertions in `test_auth_artifact_loading.py` and
 `test_failure_screenshots.py` break because `Path.resolve()` rewrites `/var/folders/...` to
 `/private/var/folders/...`, and `test_browser_lifecycle.CamoufoxProcessMatchTests` errors because
-`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "104 ok + those 4".
+`kill_all_camoufox_processes()` refuses to run without `/proc`. A clean macOS run is "105 ok + those 4".
+
+The runtime Python is whatever the launcher's `PYTHON_CANDIDATES` finds first, which on a fresh box can be
+3.14 — so the source must stay **PEP 765 clean**: no `break` / `continue` / `return` that exits a `finally`
+block (3.14 warns, and the jump silently discards an exception that was propagating through the `finally`).
+`backend/tests/test_finally_control_flow.py` AST-scans `backend/`, `scripts/` and `docker/` to pin that;
+`python3.14 -W error::SyntaxWarning -m compileall -q -f backend scripts docker` is the same check as a
+hard error. Compute a flag inside the `finally` and jump after the `try` statement instead — that is what
+`run_registration()`'s per-account loop does with `stop_after_round`.
 
 There is no linter, formatter or type-checker configured, and `front/package.json` defines only
 `dev` / `build` / `preview` — there are no frontend tests. Don't invent a lint command.

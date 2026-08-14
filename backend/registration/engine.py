@@ -2917,26 +2917,32 @@ def run_registration(count):
                 )
                 registration_log(f"[-] 注册失败 [{FAIL_LABELS.get(kind, kind)}]: {exc}")
             finally:
+                # finally 里不能直接 break/continue：它会吞掉正在传播的异常，
+                # Python 3.14 起还会报 SyntaxWarning（PEP 765）。这里只算出“是否收尾”，
+                # 真正的 break 放到 try 语句之后执行。
+                stop_after_round = False
                 if controller.should_stop():
-                    break
-                # 每轮结束只关浏览器，不立刻再开。
-                # 下一轮 open_signup_page 会按需启动并导航到官网，避免空浏览器残留。
-                if i >= count:
-                    continue
-                # 账号间随机间隔
-                wait_sec = parse_account_interval()
-                if wait_sec > 0:
-                    registration_log(f"[*] 下一个账号前等待 {wait_sec:.0f} 秒...")
-                    sleep_with_cancel(wait_sec, controller.should_stop)
-                try:
-                    stop_browser()
-                    time.sleep(0.5)
-                except RegistrationCancelled:
-                    break
-                except Exception as close_exc:
-                    if controller.should_stop():
-                        break
-                    registration_log(f"[Debug] 轮次关闭浏览器失败: {close_exc}")
+                    stop_after_round = True
+                elif i < count:
+                    # 每轮结束只关浏览器，不立刻再开。
+                    # 下一轮 open_signup_page 会按需启动并导航到官网，避免空浏览器残留。
+                    # 账号间随机间隔
+                    wait_sec = parse_account_interval()
+                    if wait_sec > 0:
+                        registration_log(f"[*] 下一个账号前等待 {wait_sec:.0f} 秒...")
+                        sleep_with_cancel(wait_sec, controller.should_stop)
+                    try:
+                        stop_browser()
+                        time.sleep(0.5)
+                    except RegistrationCancelled:
+                        stop_after_round = True
+                    except Exception as close_exc:
+                        if controller.should_stop():
+                            stop_after_round = True
+                        else:
+                            registration_log(f"[Debug] 轮次关闭浏览器失败: {close_exc}")
+            if stop_after_round:
+                break
     except RegistrationCancelled:
         registration_log("[!] 注册被停止")
     except Exception as exc:
