@@ -93,6 +93,38 @@ class VmailAdapterTests(unittest.TestCase):
         self.assertGreaterEqual(calls["list"], 1)
         self.assertEqual(calls["detail"], 1)
 
+    def test_wait_for_code_all_digit_subject(self):
+        # 复现 2026-08-19 事故：验证码只在主题里且为纯数字，曾导致无限轮询
+        def http_get(url, params=None, headers=None, **_kwargs):
+            if url.endswith("/messages"):
+                return _Resp(200, {"data": [{"id": "m1", "subject": "SpaceXAI confirmation code: 688-106"}]})
+            if url.endswith("/messages/m1"):
+                return _Resp(
+                    200,
+                    {
+                        "data": {
+                            "id": "m1",
+                            "subject": "SpaceXAI confirmation code: 688-106",
+                            "text": "Enter this code to finish signing up.",
+                            "html": "<style>.sm-w-per-100{width:100%}</style><p>Enter this code to finish signing up.</p>",
+                        }
+                    },
+                )
+            raise AssertionError(url)
+
+        code = vmail.wait_for_code(
+            http_get,
+            "https://mail.22y.uk",
+            "test-key",
+            "box1",
+            "abc@example.com",
+            timeout=5,
+            poll_interval=0,
+            raise_if_cancelled=lambda _cb: None,
+            sleep_with_cancel=lambda _s, _cb: None,
+        )
+        self.assertEqual(code, "688-106")
+
     def test_create_requires_api_key(self):
         with self.assertRaises(Exception):
             vmail.create_mailbox(mock.Mock(), "https://mail.22y.uk", "")

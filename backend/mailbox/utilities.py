@@ -36,7 +36,8 @@ _SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1\s*>", re.IGNORECA
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 
-# 验证码形如 I6R-B2W：必须全大写，否则邮件模板里的 CSS 类名（如 sm-w-per-100）会被误判。
+# 验证码形如 I6R-B2W（旧版）或 688-106（新版纯数字）：必须全大写，
+# 否则邮件模板里的 CSS 类名（如 sm-w-per-100）会被误判。
 _CODE_TOKEN = r"[A-Z0-9]{3}-[A-Z0-9]{3}"
 _CODE_WITH_CONTEXT_RE = re.compile(
     r"(?:code|验证码)\s*(?:is|：|:)?\s*\b(" + _CODE_TOKEN + r")\b", re.IGNORECASE
@@ -62,22 +63,30 @@ def strip_html(html: str) -> str:
     return _TAG_RE.sub(" ", cleaned)
 
 
-def _match_code(pattern: re.Pattern, source: str) -> Optional[str]:
-    """取第一个含字母的匹配，纯数字串（如 100-200）不是验证码。"""
+def _match_code(pattern: re.Pattern, source: str, allow_numeric: bool = False) -> Optional[str]:
+    """优先取含字母的匹配；allow_numeric 时纯数字匹配作兜底。
+
+    裸 token 匹配必须含字母，否则数字区间（如 100-200）会被误判；
+    带 code/验证码 上下文的匹配本身已是强信号，且 xAI 新版邮件的
+    验证码就是纯数字（如 688-106），所以允许纯数字兜底。
+    """
+    numeric_fallback: Optional[str] = None
     for match in pattern.finditer(source):
         token = match.group(1)
         if any(ch.isalpha() for ch in token):
             return token
-    return None
+        if allow_numeric and numeric_fallback is None:
+            numeric_fallback = token
+    return numeric_fallback
 
 
 def extract_verification_code(text: str, subject: str = "") -> Optional[str]:
     subject = subject or ""
     text = text or ""
     # 主题最干净，优先；正文里带 code 关键字的上下文次之，裸 token 最后。
-    for pattern in (_CODE_WITH_CONTEXT_RE, _CODE_BARE_RE):
+    for pattern, allow_numeric in ((_CODE_WITH_CONTEXT_RE, True), (_CODE_BARE_RE, False)):
         for source in (subject, text):
-            code = _match_code(pattern, source)
+            code = _match_code(pattern, source, allow_numeric)
             if code:
                 return code
     for pattern in _NUMERIC_CODE_RES:
