@@ -1969,70 +1969,121 @@ def update_nsfw_settings(session, log_callback=None):
         return False, f"update_nsfw_settings 异常: {e}"
 
 
-def enable_nsfw_via_browser(token="", log_callback=None):
-    """在已登录的注册浏览器内调用 grok.com 接口，绕过外部 HTTP 的 CF 拦截。"""
-    page_obj = _active_page()
-    if page_obj is None:
-        return False, "浏览器页面未就绪"
+def _page_origin_is_grok(page_obj) -> bool:
+    """当前页面是否已经在 grok.com 源上（用于跳过重复导航）。
 
-    birth = generate_random_birthdate()
-    nsfw_bytes = encode_grpc_nsfw_settings()
-    nsfw_b64 = base64.b64encode(nsfw_bytes).decode("ascii")
-
+    只认真正的 grok.com 及其子域，避免 "notgrok.com" 之类被误判成同源。
+    """
+    raw = ""
+    for reader in (
+        lambda: page_obj.run_js("return location.origin || '';"),
+        lambda: getattr(page_obj, "url", ""),
+    ):
+        try:
+            raw = str(reader() or "").strip()
+        except Exception:
+            raw = ""
+        if raw:
+            break
+    if not raw:
+        return False
     try:
-        if log_callback:
-            log_callback("[*] 浏览器内开启 NSFW：打开 grok.com ...")
-        # 确保 SSO cookie 在浏览器上下文中
-        if token:
-            try:
-                page_obj.set.cookies(
-                    [
-                        {"name": "sso", "value": token, "domain": ".x.ai", "path": "/"},
-                        {"name": "sso-rw", "value": token, "domain": ".x.ai", "path": "/"},
-                        {"name": "sso", "value": token, "domain": ".grok.com", "path": "/"},
-                        {"name": "sso-rw", "value": token, "domain": ".grok.com", "path": "/"},
-                    ]
+        host = urlsplit(raw if "//" in raw else f"//{raw}").hostname or ""
+    except Exception:
+        return False
+    host = host.lower()
+    return host == "grok.com" or host.endswith(".grok.com")
+
+
+# NSFW 浏览器路径的等待参数。实测（646 次 attempt）该步骤中位 7s / p90 15s，
+# 累计占全部注册墙钟的 12.6%，是单账号最大的可优化项，所以这里的等待都要能提前退出。
+NSFW_CF_WAIT_TIMEOUT = 25.0    # 等 CF 挑战结束的总预算（沿用原来的 25 拍 × 1s）
+NSFW_CF_POLL_INTERVAL = 0.25   # 挑战页检测步长；CF 多数在 1s 内放行，1s 步长会白等近一整拍
+NSFW_CF_SETTLE = 0.25          # 确认非挑战页后的落定时间
+# 拿 CF cookie 只需要落在 grok.com 源上，不需要把整个 SPA 拉起来。先试轻量路径，
+# 被 CF 拦了就退回首页并把轻量路径在本进程内标记为不可用——失败代价封顶为
+# 「每进程一次多余导航」，而不是每个账号都赌一次。
+NSFW_LIGHT_ENTRY = "https://grok.com/robots.txt"
+NSFW_FULL_ENTRY = "https://grok.com/"
+_nsfw_light_entry_lock = threading.Lock()
+_nsfw_light_entry_usable = True
+
+
+def nsfw_light_entry_usable() -> bool:
+    with _nsfw_light_entry_lock:
+        return _nsfw_light_entry_usable
+
+
+def _disable_nsfw_light_entry(log_callback=None):
+    global _nsfw_light_entry_usable
+    with _nsfw_light_entry_lock:
+        changed = _nsfw_light_entry_usable
+        _nsfw_light_entry_usable = False
+    if changed and log_callback:
+        log_callback(f"[*] 轻量入口 {NSFW_LIGHT_ENTRY} 不被 CF 放行，本次运行改用首页")
+
+
+def reset_nsfw_light_entry():
+    """测试和新一轮任务用：恢复轻量入口的尝试资格。"""
+    global _nsfw_light_entry_usable
+    with _nsfw_light_entry_lock:
+        _nsfw_light_entry_usable = True
+
+
+def _nsfw_result_blocked_by_cf(result) -> bool:
+    """页内 fetch 的结果是否是被 CF 拦下来的（据此决定要不要退回首页）。"""
+    if not isinstance(result, dict):
+        return True
+    for status_key, body_key in (("birthStatus", "birthBody"), ("nsfwStatus", "nsfwBody")):
+        status = int(result.get(status_key) or 0)
+        body = str(result.get(body_key) or "").lower()
+        if status == 403 or status == 0 or "just a moment" in body:
+            return True
+    return False
+
+
+def _nsfw_wait_for_non_challenge(page_obj, log_callback=None) -> bool:
+    """轮询到页面不再是 CF 挑战页；返回是否确认通过。"""
+    deadline = time.time() + NSFW_CF_WAIT_TIMEOUT
+    while True:
+        try:
+            title = str(page_obj.run_js("return document.title || '';") or "").lower()
+            body = str(
+                page_obj.run_js(
+                    "return (document.body && (document.body.innerText||'')) || '';"
                 )
-            except Exception:
-                try:
-                    page_obj.run_js(
-                        """
-const token = arguments[0];
-document.cookie = 'sso=' + token + '; path=/; domain=.grok.com';
-document.cookie = 'sso-rw=' + token + '; path=/; domain=.grok.com';
-                        """,
-                        token,
-                    )
-                except Exception:
-                    pass
-        page_obj.get("https://grok.com/")
+                or ""
+            ).lower()
+            if "just a moment" not in title and "just a moment" not in body[:200]:
+                if "checking your browser" not in body[:300]:
+                    return True
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            if log_callback:
+                log_callback("[!] grok.com 仍停在 Cloudflare 挑战页，浏览器内 NSFW 可能失败")
+            return False
+        time.sleep(NSFW_CF_POLL_INTERVAL)
+
+
+def _nsfw_enter_grok_origin(page_obj, entry, log_callback=None):
+    """把页面带到 grok.com 源上并等 CF 放行。entry 为 None 表示已经同源。"""
+    if entry is None:
+        if log_callback:
+            log_callback("[*] 浏览器内开启 NSFW：已在 grok.com，跳过导航")
+    else:
+        if log_callback:
+            log_callback(f"[*] 浏览器内开启 NSFW：打开 {entry} ...")
+        page_obj.get(entry)
         try:
             page_obj.wait.doc_loaded()
         except Exception:
             pass
-        # 等 CF 挑战结束，否则 fetch 也会拿到 Just a moment
-        for i in range(25):
-            try:
-                title = str(page_obj.run_js("return document.title || '';") or "").lower()
-                body = str(
-                    page_obj.run_js(
-                        "return (document.body && (document.body.innerText||'')) || '';"
-                    )
-                    or ""
-                ).lower()
-                if "just a moment" not in title and "just a moment" not in body[:200]:
-                    if "checking your browser" not in body[:300]:
-                        break
-            except Exception:
-                pass
-            time.sleep(1.0)
-        else:
-            if log_callback:
-                log_callback("[!] grok.com 仍停在 Cloudflare 挑战页，浏览器内 NSFW 可能失败")
-        time.sleep(1.0)
+    _nsfw_wait_for_non_challenge(page_obj, log_callback=log_callback)
+    time.sleep(NSFW_CF_SETTLE)
 
-        result = page_obj.run_js(
-            r"""
+
+_NSFW_FETCH_JS = r"""
 const birthDate = arguments[0];
 const nsfwB64 = arguments[1];
 function b64ToBytes(b64) {
@@ -2084,10 +2135,66 @@ return (async () => {
   }
   return out;
 })();
-            """,
-            birth,
-            nsfw_b64,
-        )
+            """
+
+
+def _nsfw_entry_candidates(page_obj):
+    """本次要依次尝试的入口列表（最多两个：轻量路径 → 首页）。"""
+    if _page_origin_is_grok(page_obj):
+        return [None]
+    if nsfw_light_entry_usable():
+        return [NSFW_LIGHT_ENTRY, NSFW_FULL_ENTRY]
+    return [NSFW_FULL_ENTRY]
+
+
+def enable_nsfw_via_browser(token="", log_callback=None):
+    """在已登录的注册浏览器内调用 grok.com 接口，绕过外部 HTTP 的 CF 拦截。"""
+    page_obj = _active_page()
+    if page_obj is None:
+        return False, "浏览器页面未就绪"
+
+    birth = generate_random_birthdate()
+    nsfw_bytes = encode_grpc_nsfw_settings()
+    nsfw_b64 = base64.b64encode(nsfw_bytes).decode("ascii")
+
+    try:
+        # 确保 SSO cookie 在浏览器上下文中
+        if token:
+            try:
+                page_obj.set.cookies(
+                    [
+                        {"name": "sso", "value": token, "domain": ".x.ai", "path": "/"},
+                        {"name": "sso-rw", "value": token, "domain": ".x.ai", "path": "/"},
+                        {"name": "sso", "value": token, "domain": ".grok.com", "path": "/"},
+                        {"name": "sso-rw", "value": token, "domain": ".grok.com", "path": "/"},
+                    ]
+                )
+            except Exception:
+                try:
+                    page_obj.run_js(
+                        """
+const token = arguments[0];
+document.cookie = 'sso=' + token + '; path=/; domain=.grok.com';
+document.cookie = 'sso-rw=' + token + '; path=/; domain=.grok.com';
+                        """,
+                        token,
+                    )
+                except Exception:
+                    pass
+        # 取 sso 时可能已经跳到了 grok.com（wait_for_sso_cookie 的 grok nudge），
+        # 同源就不用再导航。否则先试轻量入口，被 CF 拦了才退回首页。
+        candidates = _nsfw_entry_candidates(page_obj)
+        result = None
+        for index, entry in enumerate(candidates):
+            _nsfw_enter_grok_origin(page_obj, entry, log_callback=log_callback)
+            result = page_obj.run_js(_NSFW_FETCH_JS, birth, nsfw_b64)
+            if not _nsfw_result_blocked_by_cf(result):
+                break
+            if entry == NSFW_LIGHT_ENTRY:
+                _disable_nsfw_light_entry(log_callback=log_callback)
+            if index + 1 >= len(candidates):
+                break
+
         if not isinstance(result, dict):
             return False, f"浏览器 NSFW 返回异常: {result!r}"
 
@@ -2278,6 +2385,8 @@ def registration_log(message):
 def run_registration(count):
     controller = RegistrationStopController()
     reset_network_route_logs()
+    # 上一轮可能因为一次性的 CF 抖动把轻量入口禁掉了，新任务重新探一次
+    reset_nsfw_light_entry()
     if get_email_provider() == "outlookemail":
         reset_outlookemail_runtime_state()
 
