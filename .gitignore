@@ -32,3 +32,7 @@ yarn-error.log*
 .vscode/
 *.swp
 *.bak
+
+# ---- 本地临时产物（不进仓库）----
+grok-images/
+backend/tests/test_registration_performance.py
